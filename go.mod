@@ -1,4 +1,4 @@
-module b00m-in/data
+module github.com/b00m-in/data
 
 go 1.19
 

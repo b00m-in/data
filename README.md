@@ -19,4 +19,8 @@ require b00m.in/data v0.0.0
 replace b00m.in/data => ../data` 
 ```
 
-Don't use `go get github.com/b00m-in/data` or use this package from module cache as this module declares itself as `b00m.in/data`. All release versions have been deleted.
+If you use `go get github.com/b00m-in/data` or use this package from module cache, then use the release which may lack latest commits:
+
+```
+require github.com/b00m-in/data v1.0.1 
+```

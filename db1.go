@@ -500,6 +500,7 @@ func GetPubStatsForSub(sub_id int64) (*PubStat, error) {
                 glog.Errorf("data.GetPubStatsForSub dbquery %v \n", err)
                 return nil, err
         }
+        defer rows.Close()
         rows.Next() // should be only one row
         err = rows.Scan(&ps.P)
         if err != nil {

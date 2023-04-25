@@ -4,9 +4,39 @@ import(
         "fmt"
         "math/rand"
         "sort"
+        "strconv"
         "time"
         "github.com/golang/glog"
 )
+
+type Packet struct {
+        Id int64 `json:"id"` // this corresponds to pub_hash in table packet 
+        Timestamp time.Time `json:"timestamp,omitempty"`
+        Status bool `json:"status"`
+        Voltage float64 `json:"voltage"`
+        Current float64 `json:"current"`
+        ActiPwr float64 `json:"activePower"` // W
+        AppaPwr float64 `json:"apparentPwr"` // VA
+        ReacPwr float64 `json:"reactivePwr"` // VAr
+        PwrFctr float64 `json:"powerFactor"`
+        Frequency float64 `json:"freq"`
+        ImActEn float64 `json:"impActvEnrg"`
+        ExActEn float64 `json:"expActvEnrg"`
+        ImRctEn float64 `json:"impRctvEnrg"`
+        ExRctEn float64 `json:"expRctvEnrg"`
+        TlActEn float64 `json:"ttlActvEnrg"`
+        TlRctEn float64 `json:"ttlRctvEnrg"`
+        Lat float64 `json:"lat"`
+        Lng float64 `json:"lng"`
+}
+
+func (p *Packet) FormattedTimestamp() string {
+        return p.Timestamp.Format("2006-01-02 15:04:05")
+}
+
+func (p *Packet) PwrToKw(divisor float64) string {
+        return strconv.FormatFloat(p.ActiPwr/divisor, 'f', 4, 64)
+}
 
 type Packets []*Packet
 /*func (ps Packets) Len() int {

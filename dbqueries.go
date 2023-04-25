@@ -16,9 +16,19 @@ var (
 
         getallpubsforsub = "select pub.pub_id, created_at, latitude, longitude, hash from pub inner join subpub on subpub.pub_id = pub.pub_id where sub_id=$1 order by created_at desc limit $2"
 
+        getnumpubsforsub = "select count(*) from pub where creator=$1"
+
+        getnumprotectedpubsforsub = "select count(*) from pub where creator=$1 and protected=true"
+
+        getnumpubsonlineforsub = "select count(*) from pubconfig inner join pub on pub.hash = pubconfig.hash where pub.creator = $1 where pubconfig.since > $2"
+
         getpubfaultsforsub = "select pub_id, created_at, latitude, longitude, hash from pub where creator=$1 and protected=false order by created_at desc limit $2"
 
         getpubfaults = "select distinct on (pub_hash) packet.pub_hash, pubconfig.nickname, pubconfig.lastnotified from packet inner join pubconfig using(pub_hash) where pubconfig.notify=true and packet.protected=false order by pub_hash, created_at desc limit 10"
+
+        getdummiesforsub = "select nickname, kwp, kwpmake, kwr, kwrmake, pub.creator, pub.latitude, pub.longitude from pubconfig inner join pub on pub.hash = pubconfig.pub_hash where pub.creator=$1 and pub.protected=false"
+
+        getdummiesforall = "select nickname, kwp, kwpmake, kwr, kwrmake, pub.creator, pub.latitude, pub.longitude from pubconfig inner join pub on pub.hash = pubconfig.pub_hash where pub.protected=false"
 
         getsubforpub = "select sub.sub_id, sub.email, sub.name from sub inner join pub on sub.sub_id=pub.creator where pub.hash=$1 limit 1"
 
@@ -33,6 +43,8 @@ var (
         getcsubbyemail = "select sub_id, created_at, email from csub where email=$1 order by created_at desc limit 1"
 
         getverification = "select sub_id, email from sub where verification=$1"
+
+        countsubs = "select count(distinct email) from sub"
 
         getlastconfobydevicename = "select devicename, ssid, created_at from confo where devicename=$1 and ssid=$2 order by created_at desc limit 1"
 

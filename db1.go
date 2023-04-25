@@ -9,9 +9,7 @@ import (
         "crypto/sha1"
         "math/rand"
         "sort"
-        "strconv"
 	"time"
-        "golang.org/x/crypto/bcrypt"
 )
 
 var (
@@ -40,35 +38,6 @@ type Coordinate struct {
         Latitude float32
         Longitude float32
         Altitude float32
-}
-
-type Packet struct {
-        Id int64 `json:"id"` // this corresponds to pub_hash in table packet 
-        Timestamp time.Time `json:"timestamp,omitempty"`
-        Status bool `json:"status"`
-        Voltage float64 `json:"voltage"`
-        Current float64 `json:"current"`
-        ActiPwr float64 `json:"activePower"` // W
-        AppaPwr float64 `json:"apparentPwr"` // VA
-        ReacPwr float64 `json:"reactivePwr"` // VAr
-        PwrFctr float64 `json:"powerFactor"`
-        Frequency float64 `json:"freq"`
-        ImActEn float64 `json:"impActvEnrg"`
-        ExActEn float64 `json:"expActvEnrg"`
-        ImRctEn float64 `json:"impRctvEnrg"`
-        ExRctEn float64 `json:"expRctvEnrg"`
-        TlActEn float64 `json:"ttlActvEnrg"`
-        TlRctEn float64 `json:"ttlRctvEnrg"`
-        Lat float64 `json:"lat"`
-        Lng float64 `json:"lng"`
-}
-
-func (p *Packet) FormattedTimestamp() string {
-        return p.Timestamp.Format("2006-01-02 15:04:05")
-}
-
-func (p *Packet) PwrToKw(divisor float64) string {
-        return strconv.FormatFloat(p.ActiPwr/divisor, 'f', 4, 64)
 }
 
 type Confo struct {
@@ -150,21 +119,6 @@ func (ds Dummies) Swap(i, j int) {
 func (ds Dummies) Less(i,j int) bool {
         return ds[i].Kwlast > ds[j].Kwlast  // sorts descending
         //return ds[i].Kwlast < ds[j].Kwlast  // sorts asscending
-}
-
-type Sub struct {
-        Id int64 `json:"id"`
-        Email string `json:"email" form:"email"`
-        Name string `json:"name" form:"name"`
-        Phone string `json:"phone" form:"phone"`
-        Pswd string `json:"pswd" form:"pswd"`
-        Created time.Time `json:"created,omitempty"`
-        Verification string `json:"verification,omitempty"`
-        Verified bool `json:"verified"`
-}
-
-func (s *Sub) FormattedCreated() string {
-        return s.Created.Format("2006-01-02 15:04:05")
 }
 
 type WrappedCoordinate struct {
@@ -383,7 +337,7 @@ func GetPubsForSub(sub_id int64) ([]*Pub, error) {
                 glog.Error(err)
                 return nil, err
         }
-        rows, err := db.Query("select pub_id, created_at, latitude, longitude, hash from pub where creator=$1 order by created_at desc limit $2", sub_id, 20)
+        rows, err := db.Query("select pub_id, created_at, latitude, longitude, hash, protected from pub where creator=$1 order by created_at desc limit $2", sub_id, 20)
         if err != nil {
                 glog.Errorf("data.GetPubs %v \n", err)
                 return nil, err
@@ -396,7 +350,7 @@ func GetPubsForSub(sub_id int64) ([]*Pub, error) {
         pbs := make([]*Pub, 0)
         for rows.Next() {
                 pb := &Pub{}
-                if err := rows.Scan(&pb.Id, &pb.Created, &pb.Latitude, &pb.Longitude, &pb.Hash); err != nil {
+                if err := rows.Scan(&pb.Id, &pb.Created, &pb.Latitude, &pb.Longitude, &pb.Hash, &pb.Protected); err != nil {
                         glog.Errorf("data.GetPubs %v \n", err)
                         return pbs, fmt.Errorf("No data for pubs \n")
                 }
@@ -406,6 +360,7 @@ func GetPubsForSub(sub_id int64) ([]*Pub, error) {
         return pbs, nil
 }
 
+//GetAllPubsForSub has a limit of 10 pubs in the query used
 func GetAllPubsForSub(sub_id int64) ([]*Pub, error) {
         db, err := GetDB()
         if err != nil {
@@ -464,6 +419,156 @@ func GetPubFaultsForSub(sub_id int64) ([]*Pub, error) {
         return pbs, nil
 }
 
+func GetUnilimitedPubFaultsForSub(sub_id int64) ([]*Pub, error) {
+        db, err := GetDB()
+        if err != nil {
+                glog.Error(err)
+                return nil, err
+        }
+        rows, err := db.Query("select pub_id, created_at, latitude, longitude, hash from pub where creator=$1 and protected=false order by created_at desc", sub_id)
+        if err != nil {
+                glog.Errorf("data.GetPubs %v \n", err)
+                return nil, err
+        }
+        defer rows.Close()
+        /*if !rows.Next() {
+                glog.Errorf("data.GetPubs no rows \n")
+                return nil, fmt.Errorf("No data for pub \n")
+        }*/
+        pbs := make([]*Pub, 0)
+        for rows.Next() {
+                pb := &Pub{}
+                if err := rows.Scan(&pb.Id, &pb.Created, &pb.Latitude, &pb.Longitude, &pb.Hash); err != nil {
+                        glog.Errorf("data.GetPubs %v \n", err)
+                        return pbs, fmt.Errorf("No data for pubs \n")
+                }
+                //glog.Infof("data.GetPubs appending \n")
+                pbs = append(pbs, pb)
+        }
+        return pbs, nil
+}
+
+//GetDummiesForSub joins the Pub & PubConfig entries for a pub and creates dummies where protected = false
+func GetDummiesForSub(sub_id int64) (Dummies, error) {
+        pbds := make(Dummies, 0)
+        db, err := GetDB()
+        if err != nil {
+                glog.Error(err)
+                return pbds, err
+        }
+        rows, err := db.Query(getdummiesforsub, sub_id)
+        if err != nil {
+                glog.Errorf("data.GetDummiesForSub dbquery %v \n", err)
+                return nil, err
+        }
+        defer rows.Close()
+        for rows.Next() {
+                pb := &PubDummy{}
+                if err := rows.Scan(&pb.Nickname, &pb.Kwp, &pb.Kwpmake, &pb.Kwr, &pb.Kwrmake, &pb.Latitude, &pb.Longitude); err != nil {
+                        glog.Errorf("data.GetDummiesForSub %v \n", err)
+                        return pbds, fmt.Errorf("No data for dummies \n")
+                }
+                pbds = append(pbds, pb)
+        }
+        return pbds, nil
+}
+
+func GetDummiesForAll() (Dummies, error) {
+        pbds := make(Dummies, 0)
+        db, err := GetDB()
+        if err != nil {
+                glog.Error(err)
+                return pbds, err
+        }
+        rows, err := db.Query(getdummiesforall)
+        if err != nil {
+                glog.Errorf("data.GetDummiesForSub dbquery %v \n", err)
+                return nil, err
+        }
+        defer rows.Close()
+        for rows.Next() {
+                pb := &PubDummy{}
+                if err := rows.Scan(&pb.Nickname, &pb.Kwp, &pb.Kwpmake, &pb.Kwr, &pb.Kwrmake, &pb.Creator, &pb.Latitude, &pb.Longitude); err != nil {
+                        glog.Errorf("data.GetDummiesForSub %v \n", err)
+                        return pbds, fmt.Errorf("No data for dummies \n")
+                }
+                pbds = append(pbds, pb)
+        }
+        return pbds, nil
+}
+
+//Populate fills the sub, pub & pubconfig tables with data required for testing/exhibiting
+func Populate(subs, pubs int) ([]int64, error) {
+        // count the subs
+        s := CountSubs()
+        // if less than desired populate subs and store a slice of sub ids
+        sids := make([]int64, 0)
+        hashes := make([]int64, 0)
+        if s < subs {
+               for i, s := range adopters {
+                        _, err := PutSub(s) 
+                        if err != nil {
+                                glog.Errorf("putsub %d, %v \n", i, err)
+                        } else {
+                                ss, err := GetSubByEmail(s.Email)
+                                if err != nil {
+                                        glog.Errorf("getsubbyemail %d, %v \n", i, err)
+                                } else {
+                                        sids = append(sids, ss.Id)
+                                }
+                        }
+                }
+        }
+        if len(sids) <= 0 {
+                ss, err := GetSubs(10)
+                if err != nil {
+                        glog.Errorf("getsubs %v \n", err)
+                }
+                for _, s:=range ss {
+                        sids = append(sids, s.Id)
+                        glog.Infof("appending %v \n", len(sids))
+                }
+        }
+        // generate random pubs distributed among the sub ids as creators - persist
+        var lat,lng float32
+        lat=13.0
+        lng=77.5
+        x := []float32{0.25, -0.25}
+        //rand.Seed(time.Now().UnixNano())
+        rand.Seed(123456)
+        for i:=0; i<pubs; i++ {
+                la:= lat + rand.Float32() * x[rand.Intn(len(x))]
+                lo:= lng + rand.Float32() * x[rand.Intn(len(x))]
+                rh := time.Duration(-1 * rand.Intn(2400))
+                ii := rand.Intn(len(kwps))
+                kwp := kwps[ii]
+                kwr := kwrs[ii]
+                kw := kwp * 0.9
+                now := time.Now().Add(time.Hour * rh).Round(time.Hour)
+                hash := int64(rand.Intn(10000))
+                hashes = append(hashes, hash)
+                pb := &Pub{Latitude: la, Longitude: lo, Hash: hash, Creator: sids[rand.Intn(len(sids))], Created: now, Protected: true}
+                _, err := PutPub(pb)
+                if err != nil {
+                        glog.Errorf("populate putpub %v \n", err)
+                } else {
+                        // generate a confo for the pub produced in previous - persist
+                        pc := &Confo{Devicename:names[i], Ssid:names[i+1], Hash:hash}
+                        _, err := PutConfo(pc)
+                        if err != nil {
+                                glog.Errorf("populate putconfo %v \n", err)
+                        }
+                        // generate a pubconfig for the pub produced in previous - persist
+                        pbc := &PubConfig{ Nickname: names[i], Hash: hash, Kwp: kwp, Kwpmake: kwpmakes[rand.Intn(len(kwpmakes))], Kwr:kwr, Kwrmake: kwrmakes[rand.Intn(len(kwrmakes))], Kwlast: kw, Kwhday: kwp*4.5, Kwhlife: rand.Float32()*1000.0}
+                        _, err = PutPubConfig(pbc)
+                        if err != nil {
+                                glog.Errorf("populate putpubc %v \n", err)
+                        }
+                }
+        }
+        return hashes, nil
+}
+
 type PubStat struct {
         T int64
         O int64
@@ -481,9 +586,9 @@ func GetPubStatsForSub(sub_id int64) (*PubStat, error) {
                 glog.Error(err)
                 return nil, err
         }
-        rows, err := db.Query("select count(*) from pub where creator=$1", sub_id)
+        rows, err := db.Query(getnumpubsforsub, sub_id)
         if err != nil {
-                glog.Errorf("data.GetPubStatsForSub dbquery %v \n", err)
+                glog.Errorf("data.GetPubStatsForSub dbquery getnumpubsforsub %v \n", err)
                 return nil, err
         }
         defer rows.Close()
@@ -494,17 +599,31 @@ func GetPubStatsForSub(sub_id int64) (*PubStat, error) {
                 glog.Errorf("data.GetPubStatsForSub rowscan %v \n", err)
                 return nil, err
         }
-        ps.O=ps.T
-        rows, err = db.Query("select count(*) from pub where creator=$1 and protected=true", sub_id)
+
+        //ps.O=ps.T
+        rows, err = db.Query(getnumpubsonlineforsub, sub_id, time.Now().Add(time.Hour*-24))
         if err != nil {
-                glog.Errorf("data.GetPubStatsForSub dbquery %v \n", err)
+                glog.Errorf("data.GetPubStatsForSub dbquery getnumpubsonlineforsub %v \n", err)
+                return nil, err
+        }
+        defer rows.Close()
+        rows.Next() // should be only one row
+        err = rows.Scan(&ps.O)
+        if err != nil {
+                glog.Errorf("data.GetPubStatsForSub rowscan getnumpubsonlineforsub %v \n", err)
+                return nil, err
+        }
+
+        rows, err = db.Query(getnumprotectedpubsforsub, sub_id)
+        if err != nil {
+                glog.Errorf("data.GetPubStatsForSub dbquery getnumprotectedpubsforsub %v \n", err)
                 return nil, err
         }
         defer rows.Close()
         rows.Next() // should be only one row
         err = rows.Scan(&ps.P)
         if err != nil {
-                glog.Errorf("data.GetPubStatsForSub rowscan %v \n", err)
+                glog.Errorf("data.GetPubStatsForSub rowscan getnumprotectedpubsforsub %v \n", err)
                 return nil, err
         }
         return ps, nil
@@ -564,13 +683,13 @@ func GetPubFaults(withCreator bool) (Dummies, error) {
 }
 
 //UpdatePubStatus updates `pub.protected` and `pubconfig.lastnotified` in two separate update queries
-func UpdatePubStatus(pub_hash int64) error {
+func UpdatePubStatus(pub_hash int64, status, setlastnotified bool) error {
         db, err := GetDB()
         if err != nil {
                 glog.Errorf("updatepubstatus getdb %v \n", err)
                 return err
         }
-        result, err := db.Exec("update pub set protected=false where hash=$1", pub_hash)
+        result, err := db.Exec("update pub set protected=$1 where hash=$2", status, pub_hash)
         if err != nil {
                 glog.Errorf("updatebpubstatus update %v \n", err)
                 return err
@@ -580,15 +699,28 @@ func UpdatePubStatus(pub_hash int64) error {
                 glog.Errorf("Expected to affect 1 row, affected %d", rows)
                 return fmt.Errorf("updatepubstatus no rows updated")
         }
-        result, err = db.Exec("update pubconfig set lastnotified=NOW() where pub_hash=$1", pub_hash)
-        if err != nil {
-                glog.Errorf("updatebpubstatus setlastnotified %v \n", err)
-                return err
-        }
-        rows, err = result.RowsAffected()
-        if rows != 1 {
-                glog.Errorf("Expected to affect 1 row, affected %d", rows)
-                return fmt.Errorf("updatepubstatus setlastnotified no rows updated")
+        if setlastnotified {
+                result, err = db.Exec("update pubconfig set lastnotified=NOW() where pub_hash=$1", pub_hash)
+                if err != nil {
+                        glog.Errorf("updatebpubstatus setlastnotified %v \n", err)
+                        return err
+                }
+                rows, err = result.RowsAffected()
+                if rows != 1 {
+                        glog.Errorf("Expected to affect 1 row, affected %d", rows)
+                        return fmt.Errorf("updatepubstatus setlastnotified no rows updated")
+                }
+        } else {
+                result, err = db.Exec("update pubconfig set since=NOW() where pub_hash=$1", pub_hash)
+                if err != nil {
+                        glog.Errorf("updatebpubstatus setsince %v \n", err)
+                        return err
+                }
+                rows, err = result.RowsAffected()
+                if rows != 1 {
+                        glog.Errorf("Expected to affect 1 row, affected %d", rows)
+                        return fmt.Errorf("updatepubstatus setsince no rows updated")
+                }
         }
         return nil
 }
@@ -613,7 +745,7 @@ func GetPubDeviceName(pub_hash int64) (string, error){
         devicename := ""
         err = rows.Scan(&devicename)
         if err != nil {
-                glog.Errorf("data.GetSubByEmail %v \n", err)
+                glog.Errorf("data.GetPubDeviceName %v \n", err)
                 return "", err
         }
         return devicename, nil;
@@ -697,305 +829,6 @@ func UpdatePubConfig(pubc *PubConfig) error {
                 return err
         }
         return nil
-}
-
-func Hash(pswd []byte, cost int) ([]byte, error) {
-        hash, err := bcrypt.GenerateFromPassword(pswd, bcrypt.DefaultCost)
-        if err != nil {
-                return nil, err
-        }
-        return hash, nil
-}
-
-func CompareHash(email string, pswd string) bool {
-        db, err := GetDB()
-        if err != nil {
-                glog.Error(err)
-                return false
-        }
-        rows, err := db.Query("select sub_id, email, pswd from sub where email=$1 order by created_at desc limit 1", email)
-        if err != nil {
-                glog.Errorf("data.CheckPswd %v \n", err)
-                return false
-        }
-        defer rows.Close()
-        if !rows.Next() {
-                glog.Errorf("data.CheckPswd %v \n", err)
-                return false
-        }
-        pc := &Sub{}
-        err = rows.Scan(&pc.Id, &pc.Email, &pc.Pswd)
-        if err != nil {
-                glog.Errorf("data.CheckPswd %v \n", err)
-                return false
-        }
-        /*if pc.Pswd != pswd {
-                return false
-        }*/
-        if err := bcrypt.CompareHashAndPassword([]byte(pc.Pswd), []byte(pswd)); err != nil {
-                glog.Errorf("data.CheckPswd %v \n", err)
-                return false
-        }
-        return true
-}
-
-func (sub *Sub) Put() (uint64, error) {
-        db, err := GetDB()
-        if err != nil {
-                glog.Error(err)
-                return 0, err
-        }
-        // convert to timestamp
-        //created, err := time.Unix(confo.Created, 0).MarshalText()
-        created, err := sub.Created.MarshalText()
-	if err != nil || sub.Created.Before(time.Date(2000,1,1,1,1,1,1,time.UTC)) {
-                glog.Error(err)
-		created, err = time.Now().MarshalText()
-	}
-        pb, err := Hash([]byte(sub.Pswd), bcrypt.DefaultCost)
-        if err != nil {
-                glog.Errorf("%v\n", err)
-        } else {
-                sub.Pswd = string(pb)
-        }
-        result, err := db.Exec("insert into sub (email, phone, name, pswd, created_at, verification) values ($1, $2, $3, $4, $5, $6)", sub.Email, sub.Phone, sub.Name, sub.Pswd, string(created), sub.Verification)
-        if err != nil {
-                glog.Error(err)
-                return 0 , err
-        }
-        rows, err := result.RowsAffected()
-        if rows != 1 {
-                glog.Error("expected to affect 1 row, affected %d", rows)
-                return uint64(rows) , err
-        }
-        return uint64(rows), nil
-}
-
-func (sub *Sub) Update() error {
-        db, err := GetDB()
-        if err != nil {
-                glog.Error(err)
-                return err
-        }
-        pb, err := Hash([]byte(sub.Pswd), bcrypt.DefaultCost)
-        if err != nil {
-                glog.Errorf("%v\n", err)
-        } else {
-                sub.Pswd = string(pb)
-        }
-        result, err := db.Exec("update sub set pswd=$1 where email=$2", sub.Pswd, sub.Email)
-        if err != nil {
-                glog.Errorf("Couldn't update pub %v \n", err)
-                return err
-        }
-        rows, err := result.RowsAffected()
-        if rows != 1 {
-                glog.Errorf("Expected to affect 1 row, affected %d", rows)
-                return fmt.Errorf("sub %s not updated", sub.Email)
-        }
-        return nil
-}
-
-func PutSub(sub *Sub) (uint64, error) {
-        db, err := GetDB()
-        if err != nil {
-                glog.Error(err)
-                return 0, err
-        }
-        // convert to timestamp
-        //created, err := time.Unix(confo.Created, 0).MarshalText()
-        created, err := sub.Created.MarshalText()
-	if err != nil || sub.Created.Before(time.Date(2000,1,1,1,1,1,1,time.UTC)) {
-                glog.Error(err)
-		created, err = time.Now().MarshalText()
-	}
-        result, err := db.Exec("insert into sub (email, phone, name, pswd, created_at, verification) values ($1, $2, $3, $4, $5, $6)", sub.Email, sub.Phone, sub.Name, sub.Pswd, string(created), sub.Verification)
-        if err != nil {
-                glog.Error(err)
-                return 0 , err
-        }
-        rows, err := result.RowsAffected()
-        if rows != 1 {
-                glog.Error("expected to affect 1 row, affected %d", rows)
-                return uint64(rows) , err
-        }
-        return uint64(rows), nil
-}
-
-func UpdateSub(sub *Sub) error {
-        db, err := GetDB()
-        if err != nil {
-                glog.Error(err)
-                return err
-        }
-        result, err := db.Exec("update sub set pswd=$1 where email=$2", sub.Pswd, sub.Email)
-        if err != nil {
-                glog.Errorf("Couldn't update pub %v \n", err)
-                return err
-        }
-        rows, err := result.RowsAffected()
-        if rows != 1 {
-                glog.Errorf("Expected to affect 1 row, affected %d", rows)
-                return fmt.Errorf("sub %s not updated", sub.Email)
-        }
-        return nil
-}
-
-func GetSubByEmail(email string) (*Sub, error) {
-        db, err := GetDB()
-        if err != nil {
-                glog.Error(err)
-                return nil, err
-        }
-        rows, err := db.Query("select sub_id, created_at, email, name, phone from sub where email=$1 order by created_at desc limit 1", email)
-        if err != nil {
-                glog.Errorf("data.GetSubByEmail %v \n", err)
-                return nil, err
-        }
-        defer rows.Close()
-        if !rows.Next() {
-                glog.Errorf("data.GetSubByEmail %v \n", err)
-                return nil, fmt.Errorf("No data for email: %s \n", email)
-        }
-        pc := &Sub{}
-        err = rows.Scan(&pc.Id, &pc.Created, &pc.Email, &pc.Name, &pc.Phone)
-        if err != nil {
-                glog.Errorf("data.GetSubByEmail %v \n", err)
-                return nil, err
-        }
-        return pc, nil
-}
-
-func CheckPswd(email string, pswd string) bool {
-        db, err := GetDB()
-        if err != nil {
-                glog.Error(err)
-                return false
-        }
-        rows, err := db.Query("select sub_id, email, pswd from sub where email=$1 order by created_at desc limit 1", email)
-        if err != nil {
-                glog.Errorf("data.CheckPswd %v \n", err)
-                return false
-        }
-        defer rows.Close()
-        if !rows.Next() {
-                glog.Errorf("data.CheckPswd %v \n", err)
-                return false
-        }
-        pc := &Sub{}
-        err = rows.Scan(&pc.Id, &pc.Email, &pc.Pswd)
-        if err != nil {
-                glog.Errorf("data.CheckPswd %v \n", err)
-                return false
-        }
-        if pc.Pswd != pswd {
-                return false
-        }
-        return true
-}
-
-func GetSubs(limit int) ([]*Sub, error) {
-        db, err := GetDB()
-        if err != nil {
-                glog.Error(err)
-                return nil, err
-        }
-        rows, err := db.Query("select sub_id, created_at, email, name, phone, verified from sub order by created_at desc limit $1", limit)
-        if err != nil {
-                glog.Errorf("data.GetSubs %v \n", err)
-                return nil, err
-        }
-        defer rows.Close()
-        /*if !rows.Next() {
-                glog.Errorf("data.GetPubs no rows \n")
-                return nil, fmt.Errorf("No data for pub \n")
-        }*/
-        sbs := make([]*Sub, 0)
-        for rows.Next() {
-                sb := &Sub{}
-                if err := rows.Scan(&sb.Id, &sb.Created, &sb.Email, &sb.Name, &sb.Phone, &sb.Verified); err != nil {
-                        glog.Errorf("data.GetSubs %v \n", err)
-                        return sbs, fmt.Errorf("No data for subs \n")
-                }
-                //glog.Infof("data.GetSubs appending \n")
-                sbs = append(sbs, sb)
-        }
-        return sbs, nil
-}
-
-// PutCsub persists an unknown Sub with unregistered email which may be part of a confo from device
-func PutCsub(sub *Sub) (uint64, error) {
-        db, err := GetDB()
-        if err != nil {
-                glog.Error(err)
-                return 0, err
-        }
-        result, err := db.Exec("insert into csub (email) values ($1)", sub.Email)
-        if err != nil {
-                glog.Error(err)
-                return 0 , err
-        }
-        rows, err := result.RowsAffected()
-        if rows != 1 {
-                glog.Error("expected to affect 1 row, affected %d", rows)
-                return uint64(rows) , err
-        }
-        return uint64(rows), nil
-}
-
-func GetCsubByEmail(email string) (*Sub, error) {
-        db, err := GetDB()
-        if err != nil {
-                glog.Error(err)
-                return nil, err
-        }
-        rows, err := db.Query("select sub_id, created_at, email from csub where email=$1 order by created_at desc limit 1", email)
-        if err != nil {
-                glog.Errorf("data.GetCsubByEmail %v \n", err)
-                return nil, err
-        }
-        defer rows.Close()
-        if !rows.Next() {
-                glog.Errorf("data.GetCsubByEmail %v \n", err)
-                return nil, fmt.Errorf("No data for email: %s \n", email)
-        }
-        pc := &Sub{}
-        err = rows.Scan(&pc.Id, &pc.Created, &pc.Email)
-        if err != nil {
-                glog.Errorf("data.GetCsubByEmail %v \n", err)
-                return nil, err
-        }
-        return pc, nil
-}
-
-func CheckVerification(verification string) (*Sub, error) {
-        db, err := GetDB()
-        if err != nil {
-                glog.Error(err)
-                return nil, err
-        }
-        rows, err := db.Query("select sub_id, email from sub where verification=$1", verification)
-        if err != nil {
-                glog.Errorf("data.CheckVerification %v \n", err)
-                return nil, err
-        }
-        if !rows.Next() {
-                glog.Errorf("data.CheckVerification %v \n", err)
-                return nil, fmt.Errorf("No data for verification: %s \n", verification)
-        }
-        pc := &Sub{}
-        err = rows.Scan(&pc.Id, &pc.Email)
-        if err != nil {
-                glog.Errorf("data.CheckVerification %v \n", err)
-                return nil, err
-        }
-        rows.Close()
-        _, err = db.Exec("update sub set verified = TRUE where verification=$1", verification)
-        if err != nil {
-                glog.Errorf("data.CheckVerification %v \n", err)
-                return nil, err
-        }
-        return pc, nil
 }
 
 // PutConf inserts a recd. Conf in db. 

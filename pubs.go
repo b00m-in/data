@@ -12,7 +12,7 @@ import (
 	geojson "github.com/paulmach/go.geojson"
 )
 
-// Pubs is an RTree housing the pubs. Args are number of spatial dimensions, minimum and maximum branching factors
+// Pubdeets is an RTree housing the pubs. Args are number of spatial dimensions, minimum and maximum branching factors
 var Pubdeets = rtree.NewTree(2, 25, 50)
 var states = []string{"up", "down"}
 
@@ -84,6 +84,34 @@ func LoadDummyPubdeets() error {
         return nil
 }
 
+func LoadDummiesForAll() error {
+        pbs, err := GetDummiesForAll()
+        if err != nil {
+                glog.Error("GetPubs %v \n", err)
+                return err
+        }
+        rand.Seed(time.Now().UnixNano())
+        for _,pb := range pbs {
+                f := geojson.NewPointFeature([]float64{float64(pb.Longitude), float64(pb.Latitude)})
+                if err != nil {
+                        glog.Error("GetPubs %v \n", err)
+                        return err
+                        continue
+                }
+                f.Properties["name"] = pb.Nickname
+                f.Properties["creator"] = fmt.Sprintf("%d", pb.Creator)
+                f.Properties["notes"] = fmt.Sprintf("%s %s %f Kw", pb.Kwpmake, pb.Kwrmake, pb.Kwr)
+                /*f.Properties["Kwpmake"] = pbc.Kwpmake
+                f.Properties["Kwr"] = pbc.Kwr
+                f.Properties["Kwrmake"] = pbc.Kwrmake*/
+                f.Properties["state"] = states[rand.Intn(len(states))]
+                Pubdeets.DeleteWithComparator(&Station{f}, ComparePubDeets)
+                Pubdeets.Insert(&Station{f})
+                glog.Infof("Pubdeets inserted into tree %v %v\n", f.Geometry, f.Properties)
+        }
+        return nil
+}
+
 func ComparePubDeets(a, b rtree.Spatial) bool {
         return a.(*Station).feature.Properties["name"] == b.(*Station).feature.Properties["name"] //&& a.(*Station).feature.Properties["notes"] == b.(*Station).feature.Properties["notes"]
 }
@@ -130,4 +158,37 @@ func PubDeetsHandler(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, str, 500)
 		return
 	}
+}
+
+func FilterDummiesForSub(viewport, zoom, filter string) (*geojson.FeatureCollection, error) {
+	rect, err := newRect(viewport)
+	if err != nil {
+		//str := fmt.Sprintf("Couldn't parse viewport: %s", err)
+                glog.Error("filterdummiesforsub couldn't parse viewport %v \n", err)
+		return nil, err
+	}
+	zm, err := strconv.ParseInt(zoom, 10, 0)
+	if err != nil {
+		//str := fmt.Sprintf("Couldn't parse zoom: %s", err)
+                glog.Error("filterdummiesforsub couldn't parse zoom %v \n", err)
+		return nil, err
+	}
+	s := Pubdeets.SearchIntersect(rect, func(results []rtree.Spatial, object rtree.Spatial) (bool, bool) {
+                cx := object.(*Station).feature.Properties["creator"].(string)
+                if cx == filter {
+                        return false, false // don't refuse, don't abort
+                }
+                return true, false // refuse, never abort
+        })
+        if len(s) == 0 {
+                glog.Infof("Nothing in s %v \n", s)
+                glog.Infof("Rect %v \n", rect)
+        }
+	fc, err := clusterStations(s, int(zm))
+	if err != nil {
+		//str := fmt.Sprintf("Couldn't cluster results: %s", err)
+                glog.Error("filterdummiesforsub couldn't cluster results %v \n", err)
+		return nil, err
+	}
+        return fc, nil
 }
